@@ -23,7 +23,6 @@
  * \brief Property def of qnn convolution operator.
  */
 #include <tvm/data_layout.h>
-#include <tvm/ir_pass.h>
 #include <tvm/relay/analysis.h>
 #include <tvm/relay/base.h>
 #include <tvm/relay/op.h>
@@ -168,7 +167,7 @@ Expr Conv2DPadInput(const Expr& data, const QnnConv2DAttrs* param) {
     } else {
       LOG(FATAL) << "qnn.conv2d does not support " << param->data_layout << " layout";
     }
-    padded_data = Pad(data, pad_width, param->input_zero_point);
+    padded_data = Pad(data, pad_width, param->input_zero_point, "constant");
   }
   return padded_data;
 }
@@ -178,7 +177,7 @@ Expr Conv2DPadInput(const Expr& data, const QnnConv2DAttrs* param) {
  * \param data The input expr.
  * \param weight The weight expr.
  * \param param The qnn conv2d attributes.
- * \return The sequence of Relay operatos for term1.
+ * \return The sequence of Relay operators for term1.
  * \note The term1 is
  *       Sigma(c,r,s) QW(k, c, r, s) * QA(n, c, h + r, w + s)
  *       This is just conv2d on int tensors.
@@ -198,12 +197,12 @@ Expr Conv2DFirstTerm(const Expr& padded_data, const Expr& weight, const QnnConv2
  * \param param The qnn conv2d attributes.
  * \param kernel_h The height of kernel.
  * \param kernel_w The width of kernel.
- * \return The sequence of Relay operatos for term2.
+ * \return The sequence of Relay operators for term2.
  * \note The term2 looks like this
  *
  *       Sigma(c,r,s) zp_w * QA(n, c, h + r, w + s)
  *
- *       Second term is not directly represetable by one Relay operator.
+ *       Second term is not directly representable by one Relay operator.
  *       However, deeper analysis shows that we can reduce r,s using avg_pool2d,
  *       followed by a reduce on the C axis. Using avg_pool2d also gives an
  *       opportunity to reuse alter_op_layout infrastructure.
@@ -218,15 +217,6 @@ Expr Conv2DSecondTerm(const Expr& padded_data, const Expr& zp_kernel, const QnnC
   auto scaled_hw_t2 = Multiply(casted_t2, MakeConstantScalar(Int(32), kernel_h * kernel_w));
   Array<IndexExpr> padding({0, 0});
 
-  // If the pool_size is 1x1, we don't need avg_pool2d.
-  auto reduced_hw_t2 = scaled_hw_t2;
-  if (kernel_h * kernel_w != 1) {
-    reduced_hw_t2 =
-        AvgPool2D(scaled_hw_t2, param->kernel_size, param->strides, padding, param->data_layout,
-                  false,   // ceil_mode
-                  false);  // count_include_pad
-  }
-
   // Reduce the C dimension. Find the dimension.
   Array<Integer> axes_t2;
   if (param->data_layout == "NCHW") {
@@ -237,24 +227,22 @@ Expr Conv2DSecondTerm(const Expr& padded_data, const Expr& zp_kernel, const QnnC
     LOG(FATAL) << "qnn.conv2d does not support " << param->data_layout << " layout";
   }
   // Keep dims true to retain 4D tensor
-  auto reduced_t2 = Sum(reduced_hw_t2, axes_t2, true, false);
+  auto reduced_c_t2 = Sum(scaled_hw_t2, axes_t2, true, false);
+
+  // If the pool_size is 1x1, we don't need avg_pool2d.
+  auto reduced_t2 = reduced_c_t2;
+  if (kernel_h * kernel_w != 1) {
+    reduced_t2 =
+        AvgPool2D(reduced_c_t2, param->kernel_size, param->strides, padding, param->data_layout,
+                  false,   // ceil_mode
+                  false);  // count_include_pad
+  }
+
   auto multiplied_t2 = reduced_t2;
   if (param->kernel_zero_point != 1) {
     multiplied_t2 = Multiply(zp_kernel, reduced_t2);
   }
-
-  // Replicate to go back to NHWC/NCHW. This is not necessarily needed, but it fails AlterOpLayout.
-  // We can remove this once AlterOpLayout refactoring completes -
-  // https://github.com/dmlc/tvm/issues/3670
-  Array<Integer> reps;
-  if (param->data_layout == "NCHW") {
-    reps = {1, out_channels, 1, 1};
-  } else if (param->data_layout == "NHWC") {
-    reps = {1, 1, 1, out_channels};
-  } else {
-    LOG(FATAL) << "qnn.conv2d does not support " << param->data_layout << " layout";
-  }
-  return Tile(multiplied_t2, reps);
+  return multiplied_t2;
 }
 
 /*
@@ -313,7 +301,7 @@ Expr Conv2DThirdTerm(const Expr& weight, const Expr& zp_data, const QnnConv2DAtt
  * \param in_channels The number of input channels.
  * \param kernel_h The height of kernel.
  * \param kernel_w The width of kernel.
- * \return The sequence of Relay operatos for term4.
+ * \return The sequence of Relay operators for term4.
  * \note The term4 looks like this
  *
  *       Sigma(c,r,s) zp_a * zp_w
@@ -373,7 +361,7 @@ Expr Conv2DCombineTerms(const Expr& term1, const Expr& term2, const Expr& term3,
  *       where QA is quantized tensor, scale_a and zp_A are quantizations
  *       params.
  *
- *       Quantized convlution convolves two quantized tensors and returns a
+ *       Quantized convolution will convolve two quantized tensors and returns a
  *       quantized tensor of default dtype of int32, with scale equaling to the
  *       product of scales of input tensors, and a zero point of zero.
  *
@@ -399,7 +387,7 @@ Expr Conv2DCombineTerms(const Expr& term1, const Expr& term2, const Expr& term3,
  *         zero point. This might leave some performance opportunity at the
  *         table. Can be avoided by modifying conv2d API to accept the
  *         pad_const_value.
- *         2) Second term is not directly represetable by one Relay operator.
+ *         2) Second term is not directly representable by one Relay operator.
  *         However, deeper analysis shows that we can reduce r,s using
  *         avg_pool2d, followed by a reduce on the C axis. Using avg_pool2d also
  *         gives an opportunity to reuse alter_op_layout infrastructure.
@@ -408,7 +396,7 @@ Expr Conv2DCombineTerms(const Expr& term1, const Expr& term2, const Expr& term3,
  *         the conv is dilated. We fallback also in case of depthwise conv.
  *
  *       The whole process can be broken down into following steps
- *       * Assertion checks for exisiting support, fallback if necessary
+ *       * Assertion checks for existing support, fallback if necessary
  *       * Pad the input.
  *       * Get Term1.
  *       * Get Term2.

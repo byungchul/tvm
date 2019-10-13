@@ -595,7 +595,11 @@ llvm::Value* CodeGenLLVM::GetConstString(const std::string& str) {
   llvm::Type* type = llvm::ArrayType::get(t_char_, str.length() + 1);
   llvm::GlobalVariable *global = new llvm::GlobalVariable(
       *module_, type, true, llvm::GlobalValue::PrivateLinkage, 0, ".str");
+#if TVM_LLVM_VERSION >= 100
+  global->setAlignment(llvm::Align(1));
+#else
   global->setAlignment(1);
+#endif
   global->setInitializer(llvm::ConstantDataArray::getString(*ctx_, str));
   llvm::Constant* zero = ConstInt32(0);
   llvm::Constant* indices[] = {zero, zero};
@@ -746,6 +750,10 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const Call* op) {
   } else if (op->is_intrinsic(Call::reinterpret)) {
     llvm::Type * target = LLVMType(op->type);
     return builder_->CreateBitCast(MakeValue(op->args[0]), target);
+  } else if (op->is_intrinsic(Call::isnan)) {
+    // TODO(hgt312): set fast math flag
+    llvm::Value* a = MakeValue(op->args[0]);
+    return builder_->CreateFCmpUNO(a, a);
   } else if (op->is_intrinsic("vectorlow")) {
     llvm::Value *v = MakeValue(op->args[0]);
     int l = v->getType()->getVectorNumElements();
@@ -1146,7 +1154,11 @@ void CodeGenLLVM::VisitStmt_(const Allocate* op) {
             LLVMType(op->type), ConstInt32(constant_size));
       });
     if (alloca->getAlignment() < static_cast<uint32_t>(info.alignment)) {
+#if TVM_LLVM_VERSION >= 100
+      alloca->setAlignment(llvm::Align(info.alignment));
+#else
       alloca->setAlignment(info.alignment);
+#endif
     }
     info.alignment = alloca->getAlignment();
     buf = alloca;

@@ -180,31 +180,6 @@ Stmt HybridOpNode::BuildProvide(
     bool debug_keep_trivial_loop) const {
   CHECK_EQ(stage->op.operator->(), this);
   Stmt ret = AttrStmt::make(make_zero(Int(32)), attr::extern_scope, 0, this->body);
-  auto f_push_bind = [&ret](Buffer buffer, Tensor tensor) {
-    Array<NodeRef> bind_spec;
-    Array<Expr> tuple;
-    bind_spec.push_back(buffer);
-    bind_spec.push_back(tensor);
-    for (size_t k = 0; k < buffer->shape.size(); ++k) {
-      tuple.push_back(make_const(buffer->shape[k].type(), 0));
-      tuple.push_back(buffer->shape[k]);
-    }
-    ret = AttrStmt::make(
-        bind_spec, attr::buffer_bind_scope,
-        Call::make(Handle(), intrinsic::tvm_tuple, tuple, Call::Intrinsic), ret);
-  };
-  for (int i = static_cast<int>(outputs.size()) - 1; i >= 0; --i) {
-    Buffer buffer = decl_buffer(
-      outputs[i]->shape,
-      outputs[i]->dtype);
-    f_push_bind(buffer, stage->op.output(i));
-  }
-  auto curr_inputs = InputTensors();
-  for (int i = static_cast<int>(curr_inputs.size()) - 1; i >= 0; --i) {
-    Buffer buffer = decl_buffer(curr_inputs[i]->shape, curr_inputs[i]->dtype);
-    f_push_bind(buffer, curr_inputs[i]);
-  }
-
   std::unordered_map<Tensor, Tensor> rmap;
   for (int i = 0; i < this->num_outputs(); ++i) {
     rmap[outputs[i]] = stage->op.output(i);
@@ -309,7 +284,7 @@ Stmt ApplyLoopShapes(const Stage &stage,
       if (op->loop_var.get() == inner) {
         CHECK(under_outer);
         std::unordered_map<const Variable *, Expr> rmap;
-        rmap[op->loop_var.get()] = parent % op->extent;
+        rmap[op->loop_var.get()] = indexmod(parent, op->extent);
         extent = op->extent;
         fused = true;
         return ir::Substitute(op->body, rmap);
@@ -317,7 +292,7 @@ Stmt ApplyLoopShapes(const Stage &stage,
         under_outer = true;
         Stmt body = IRMutator::Mutate(op->body);
         std::unordered_map<const Variable *, Expr> rmap;
-        rmap[op->loop_var.get()] = parent / extent;
+        rmap[op->loop_var.get()] = indexdiv(parent, extent);
         body = ir::Substitute(body, rmap);
         under_outer = false;
         return For::make(parent->var, Expr(0), extent * op->extent,
@@ -325,7 +300,7 @@ Stmt ApplyLoopShapes(const Stage &stage,
       } else if (under_outer) {
         Stmt body = IRMutator::Mutate(op->body);
         std::unordered_map<const Variable *, Expr> rmap;
-        rmap[op->loop_var.get()] = parent / extent % op->extent;
+        rmap[op->loop_var.get()] = indexmod(indexdiv(parent, extent), op->extent);
         body = ir::Substitute(body, rmap);
         extent = extent * op->extent;
         return body;
