@@ -36,17 +36,25 @@ CONFIG = DefaultPynqConfig
 TOP = VTA
 TOP_TEST = Test
 BUILD_NAME = build
-USE_TRACE = 0
+USE_TRACE = 1
 VTA_LIBNAME = libvta_hw
 UNITTEST_NAME = all
 CXX = g++
 DEBUG = 0
 
+ROOTDIR = $(CURDIR)
+SRC_DIR = $(ROOTDIR)/src/main/scala
+VTA_CONFIG = python $(CURDIR)/../../config/vta_config.py
+CONF = $(shell ${VTA_CONFIG} --cfg-str)
+BUILD_DIR = $(ROOTDIR)/../../build/$(CONF)
+
 config_test = $(TOP_TEST)$(CONFIG)
 vta_dir = $(abspath ../../)
 tvm_dir = $(abspath ../../../)
-verilator_build_dir = $(vta_dir)/$(BUILD_NAME)/verilator
-chisel_build_dir = $(vta_dir)/$(BUILD_NAME)/chisel
+#verilator_build_dir = $(vta_dir)/$(BUILD_NAME)/verilator
+#chisel_build_dir = $(vta_dir)/$(BUILD_NAME)/chisel
+chisel_build_dir = $(BUILD_DIR)
+verilator_build_dir = $(chisel_build_dir)/verilator
 
 verilator_opt = --cc
 verilator_opt += +define+RANDOMIZE_GARBAGE_ASSIGN
@@ -99,7 +107,7 @@ ifeq ($(shell uname), Darwin)
   lib_path = $(vta_dir)/$(BUILD_NAME)/$(VTA_LIBNAME).dylib
   cxx_flags += -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 else
-  lib_path = $(vta_dir)/$(BUILD_NAME)/$(VTA_LIBNAME).so
+  lib_path = $(chisel_build_dir)/$(VTA_LIBNAME).so
 endif
 
 default: lint lib
@@ -120,6 +128,7 @@ $(lib_path): $(verilator_build_dir)/V$(TOP_TEST).cpp $(cxx_objs)
 		$(CXX) -fPIC $(cxx_flags) -c $${f} -o $${f}.o ; \
 	done
 	$(CXX) $(ld_flags) $(cxx_flags) $(cxx_objs) $(patsubst %.cpp,%.cpp.o,$(shell find $(verilator_build_dir)/*.cpp)) -o $@
+	cp -rf $(chisel_build_dir)/$(VTA_LIBNAME).so $(chisel_build_dir)/..
 
 verilator: $(verilator_build_dir)/V$(TOP_TEST).cpp
 $(verilator_build_dir)/V$(TOP_TEST).cpp: $(chisel_build_dir)/$(TOP_TEST).$(CONFIG).v
@@ -127,6 +136,8 @@ $(verilator_build_dir)/V$(TOP_TEST).cpp: $(chisel_build_dir)/$(TOP_TEST).$(CONFI
 
 verilog: $(chisel_build_dir)/$(TOP).$(CONFIG).v
 $(chisel_build_dir)/$(TOP).$(CONFIG).v:
+	echo "Build directory $(BUILD_DIR)"
+	mkdir -p $(BUILD_DIR)
 	sbt 'runMain vta.$(CONFIG) --target-dir $(chisel_build_dir) --top-name $(TOP).$(CONFIG)'
 
 verilog_test: $(chisel_build_dir)/$(TOP_TEST).$(CONFIG).v
@@ -138,6 +149,7 @@ unittest:
 
 clean:
 	-rm -rf target project/target project/project test_run_dir
+	-rm -rf $(BUILD_DIR)
 
 cleanall:
 	-rm -rf $(vta_dir)/$(BUILD_NAME)/chisel

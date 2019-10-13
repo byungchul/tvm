@@ -44,6 +44,26 @@ class PynqConfig
         )
     })
 
+// Zcu104 config
+class Zcu104Config
+    extends Config((site, here, up) => {
+      case ShellKey =>
+        ShellParams(
+          hostParams = AXIParams(coherent = false,
+                                 addrBits = 16,
+                                 dataBits = 32,
+                                 lenBits = 8,
+                                 userBits = 1),
+          memParams = AXIParams(coherent = true,
+                                addrBits = 32,
+                                dataBits = 128,
+                                lenBits = 8,
+                                userBits = 1),
+          vcrParams = VCRParams(),
+          vmeParams = VMEParams()
+        )
+    })
+
 /** F1Config. Shell configuration for F1 */
 class F1Config
     extends Config((site, here, up) => {

@@ -32,11 +32,17 @@ import vta.test._
   * and shell configurations.
   */
 class DefaultPynqConfig extends Config(new CoreConfig ++ new PynqConfig)
+class DefaultZcu104Config extends Config(new CoreConfig ++ new Zcu104Config)
 class DefaultF1Config extends Config(new CoreConfig ++ new F1Config)
 class DefaultDe10Config extends Config(new CoreConfig ++ new De10Config)
 
 object DefaultPynqConfig extends App {
   implicit val p: Parameters = new DefaultPynqConfig
+  chisel3.Driver.execute(args, () => new XilinxShell)
+}
+
+object DefaultZcu104Config extends App {
+  implicit val p: Parameters = new DefaultZcu104Config
   chisel3.Driver.execute(args, () => new XilinxShell)
 }
 
@@ -52,6 +58,11 @@ object DefaultDe10Config extends App {
 
 object TestDefaultPynqConfig extends App {
   implicit val p: Parameters = new DefaultPynqConfig
+  chisel3.Driver.execute(args, () => new Test)
+}
+
+object TestDefaultZcu104Config extends App {
+  implicit val p: Parameters = new DefaultZcu104Config
   chisel3.Driver.execute(args, () => new Test)
 }
 
